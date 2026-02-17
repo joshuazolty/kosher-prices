@@ -73,13 +73,20 @@ export default function ModeratePage() {
   }, []);
 
   async function approve(id: string) {
-    await supabase
-      .from("price_submissions")
-      .update({ is_approved: true })
-      .eq("id", id);
+  const { error } = await supabase
+    .from("price_submissions")
+    .update({ is_approved: true })
+    .eq("id", id);
 
-    setItems((prev) => prev.filter((x) => x.id !== id));
+  if (error) {
+    alert("Approve failed: " + error.message);
+    return;
   }
+
+  // only remove from UI if DB update succeeded
+setItems((prev) => prev.filter((x) => x.id !== id));
+}
+
 
   return (
     <main style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>

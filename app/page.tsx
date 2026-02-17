@@ -53,8 +53,7 @@ export default function Home() {
 
       const { data: subData, error: subErr } = await supabase
   .from("price_submissions")
-  .select("id,store_id,variant_id,price_cents,price_type,sale_end_date,created_at")
-  .eq("is_approved", true)
+  .select("id,store_id,variant_id,price_cents,price_type,sale_end_date,created_at,is_approved")
   .order("created_at", { ascending: false })
   .limit(5000);
 
