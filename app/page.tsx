@@ -37,6 +37,16 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [onlyWithPrices, setOnlyWithPrices] = useState(true);
 
+  const [editing, setEditing] = useState<{
+  variantId: string;
+  storeId: string;
+} | null>(null);
+
+const [editPrice, setEditPrice] = useState("");
+const [editType, setEditType] = useState<"regular" | "sale">("regular");
+const [editSaleEnd, setEditSaleEnd] = useState("");
+const [editStatus, setEditStatus] = useState<string>("");
+
   useEffect(() => {
     async function load() {
       setLoading(true);
@@ -133,36 +143,92 @@ export default function Home() {
   }
 
   function getDisplayPrice(variantId: string, storeId: string) {
-    const slot = latest[variantId]?.[storeId];
-    if (!slot) return {} as any;
+  const slot = latest[variantId]?.[storeId];
+  if (!slot) return {};
 
-    const regular = slot.regular ? slot.regular.price_cents / 100 : undefined;
-    const saleOk = isSaleStillValid(slot.sale);
-    const sale = slot.sale && saleOk ? slot.sale.price_cents / 100 : undefined;
+  const regular = slot.regular ? slot.regular.price_cents / 100 : undefined;
+  const saleOk = isSaleStillValid(slot.sale);
+  const sale = slot.sale && saleOk ? slot.sale.price_cents / 100 : undefined;
 
-    if (mode === "regular") {
-      return slot.regular
-        ? { price: regular, isSale: false, created_at: slot.regular.created_at }
-        : {};
-    }
-
-    if (mode === "sale") {
-      return slot.sale && saleOk
-        ? { price: sale, isSale: true, created_at: slot.sale.created_at }
-        : {};
-    }
-
-    // best
-    if (sale != null && regular != null) {
-      return sale <= regular
-        ? { price: sale, isSale: true, created_at: slot.sale!.created_at }
-        : { price: regular, isSale: false, created_at: slot.regular!.created_at };
-    }
-    if (sale != null) return { price: sale, isSale: true, created_at: slot.sale!.created_at };
-    if (regular != null) return { price: regular, isSale: false, created_at: slot.regular!.created_at };
-    return {};
+  if (mode === "regular") {
+    return slot.regular
+      ? { price: regular, isSale: false, created_at: slot.regular.created_at }
+      : {};
   }
 
+  if (mode === "sale") {
+    return slot.sale && saleOk
+      ? { price: sale, isSale: true, created_at: slot.sale.created_at }
+      : {};
+  }
+
+  // best
+  if (sale != null && regular != null) {
+    return sale <= regular
+      ? { price: sale, isSale: true, created_at: slot.sale!.created_at }
+      : { price: regular, isSale: false, created_at: slot.regular!.created_at };
+  }
+  if (sale != null) return { price: sale, isSale: true, created_at: slot.sale!.created_at };
+  if (regular != null) return { price: regular, isSale: false, created_at: slot.regular!.created_at };
+  return {};
+}
+function startEdit(variantId: string, storeId: string) {
+  setEditStatus("");
+  setEditing({ variantId, storeId });
+
+  const cell: any = getDisplayPrice(variantId, storeId);
+
+  if (cell?.price != null) {
+    setEditPrice(String(cell.price.toFixed(2)));
+    setEditType(cell.isSale ? "sale" : "regular");
+  } else {
+    setEditPrice("");
+    setEditType("regular");
+  }
+
+  setEditSaleEnd("");
+}
+
+async function saveEdit() {
+  if (!editing) return;
+
+  setEditStatus("");
+
+  const dollars = Number(editPrice);
+  if (!Number.isFinite(dollars) || dollars <= 0) {
+    setEditStatus("Enter a valid price like 12.99");
+    return;
+  }
+
+  const cents = Math.round(dollars * 100);
+
+  const { error } = await supabase.from("price_submissions").insert({
+    store_id: editing.storeId,
+    variant_id: editing.variantId,
+    price_cents: cents,
+    price_type: editType,
+    sale_end_date: editType === "sale" && editSaleEnd ? editSaleEnd : null,
+    is_approved: false,
+  });
+
+  if (error) {
+    setEditStatus("Error: " + error.message);
+    return;
+  }
+
+  setEditStatus("Saved! (waiting approval)");
+
+  const { data: subData } = await supabase
+    .from("price_submissions")
+    .select("id,store_id,variant_id,price_cents,price_type,sale_end_date,created_at,is_approved")
+    .order("created_at", { ascending: false })
+    .limit(5000);
+
+  setSubmissions(subData ?? []);
+  setEditing(null);
+}
+
+   
   function getCheapestInfo(variantId: string) {
     const vals: { storeId: string; price: number }[] = [];
 
@@ -185,10 +251,13 @@ export default function Home() {
   }
 
   function variantLabel(v: Variant) {
-    const size = v.size_value != null && v.size_unit ? ` — ${v.size_value}${v.size_unit}` : "";
-    const flav = v.flavour ? ` — ${v.flavour}` : "";
-    return `${v.brand_name} — ${v.product_name}${size}${flav}`;
-  }
+  const size =
+    v.size_value != null && v.size_unit ? ` — ${v.size_value}${v.size_unit}` : "";
+  const flav = v.flavour ? ` — ${v.flavour}` : "";
+  // ✅ Product first, then brand, then size/flavour
+  return `${v.product_name} — ${v.brand_name}${size}${flav}`;
+}
+
 const hasAnyPrice = (variantId: string) => {
   for (const s of stores) {
     const cell = getDisplayPrice(variantId, s.id);
@@ -322,11 +391,15 @@ const hasAnyPrice = (variantId: string) => {
                       return (
                         <td
                           key={s.id}
+                          onClick={() => startEdit(v.id, s.id)}
                           style={{
-                            ...tdStyle,
-                            background: isCheapest ? "#eaf7ee" : undefined,
-                          }}
-                        >
+                           ...tdStyle,
+                           background: isCheapest ? "#eaf7ee" : undefined,
+                           cursor: "pointer",
+                         }}
+                         title="Click to add/change price"
+                      >
+
                           {cell.price == null ? (
                             <span style={{ color: "#888" }}>—</span>
                           ) : (
@@ -354,6 +427,89 @@ const hasAnyPrice = (variantId: string) => {
           </table>
         </div>
       )}
+     {editing ? (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,0.35)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 20,
+      zIndex: 50,
+    }}
+    onClick={() => setEditing(null)}
+  >
+    <div
+      style={{
+        background: "white",
+        borderRadius: 12,
+        padding: 16,
+        width: "100%",
+        maxWidth: 420,
+        boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 10 }}>
+        Update price
+      </div>
+
+      <label style={{ display: "block", fontSize: 13, marginBottom: 10 }}>
+        Type
+        <select
+          value={editType}
+          onChange={(e) => setEditType(e.target.value as any)}
+          style={{ ...inputStyle, marginTop: 6 }}
+        >
+          <option value="regular">Regular</option>
+          <option value="sale">Sale</option>
+        </select>
+      </label>
+
+      <label style={{ display: "block", fontSize: 13, marginBottom: 10 }}>
+        Price (CAD)
+        <input
+          value={editPrice}
+          onChange={(e) => setEditPrice(e.target.value)}
+          placeholder="12.99"
+          style={{ ...inputStyle, marginTop: 6 }}
+        />
+      </label>
+
+      {editType === "sale" ? (
+        <label style={{ display: "block", fontSize: 13, marginBottom: 10 }}>
+          Sale end date (optional)
+          <input
+            type="date"
+            value={editSaleEnd}
+            onChange={(e) => setEditSaleEnd(e.target.value)}
+            style={{ ...inputStyle, marginTop: 6 }}
+          />
+        </label>
+      ) : null}
+
+      {editStatus ? (
+        <div style={{ fontSize: 13, color: editStatus.startsWith("Error") ? "crimson" : "#166534", marginBottom: 10 }}>
+          {editStatus}
+        </div>
+      ) : null}
+
+      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+        <button
+          onClick={() => setEditing(null)}
+          style={{ ...buttonStyle, background: "white", color: "#111", border: "1px solid #ddd" }}
+        >
+          Cancel
+        </button>
+        <button onClick={saveEdit} style={buttonStyle}>
+          Save
+        </button>
+      </div>
+    </div>
+  </div>
+) : null} 
     </main>
   );
 }
@@ -407,6 +563,23 @@ const tdStyle: React.CSSProperties = {
   borderBottom: "1px solid #f2f2f2",
   whiteSpace: "nowrap",
   verticalAlign: "top",
+};
+const inputStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  padding: 10,
+  border: "1px solid #ddd",
+  borderRadius: 8,
+};
+
+const buttonStyle: React.CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 8,
+  border: "1px solid #111",
+  background: "#111",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
 };
 
 const pillStyle: React.CSSProperties = {
